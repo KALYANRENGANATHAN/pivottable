@@ -39,106 +39,186 @@ callWithJQuery ($) ->
     usFmtPct = numberFormat(digitsAfterDecimal:1, scaler: 100, suffix: "%")
 
     aggregatorTemplates =
-        count: (formatter=usFmtInt) -> () -> (data, rowKey, colKey) ->
-            count: 0
-            push:  -> @count++
-            value: -> @count
-            format: formatter
+        count: (formatter = usFmtInt) -> ([attrs]) -> (data, rowKey, colKey) ->
+    counts: (attr: 0 for attr in attrs) # Initialize counts for each attribute
+    push: (record) ->
+        for attr in attrs
+            counts[attr]++ if record[attr]?
+    value: -> counts # Return the full object of counts
+    format: (counts) -> # Format counts for display
+        formattedCounts = {}
+        for attr, count of counts
+            formattedCounts[attr] = formatter(count)
+        return formattedCounts
+    numInputs: attrs.length
 
-        uniques: (fn, formatter=usFmtInt) -> ([attr]) -> (data, rowKey, colKey) ->
-            uniq: []
-            push: (record) -> @uniq.push(record[attr]) if record[attr] not in @uniq
-            value: -> fn(@uniq)
-            format: formatter
-            numInputs: if attr? then 0 else 1
+ uniques: (fn, formatter = usFmtInt) -> ([attrs]) -> (data, rowKey, colKey) ->
+    uniqs: (attr: [] for attr in attrs) # Initialize unique arrays for each attribute
+    push: (record) ->
+        for attr in attrs
+            uniqs[attr].push(record[attr]) if record[attr] not in uniqs[attr]
+    value: -> # Apply the function to each unique array
+        results = {}
+        for attr, uniqueVals of uniqs
+            results[attr] = fn(uniqueVals)
+        return results
+    format: (results) -> # Format the results for display
+        formattedResults = {}
+        for attr, result of results
+            formattedResults[attr] = formatter(result)
+        return formattedResults
+    numInputs: attrs.length
 
-        sum: (formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
-            sum: 0
-            push: (record) -> @sum += parseFloat(record[attr]) if not isNaN parseFloat(record[attr])
-            value: -> @sum
-            format: formatter
-            numInputs: if attr? then 0 else 1
-
-        extremes: (mode, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
-            val: null
-            sorter: getSort(data?.sorters, attr)
+        sum: (formatter = usFmt) -> ([attrs]) -> (data, rowKey, colKey) ->
+            sums: (attr: 0 for attr in attrs) # Initialize sums for each attribute
             push: (record) ->
-                x = record[attr]
-                if mode in ["min", "max"]
-                    x = parseFloat(x)
-                    if not isNaN x then @val = Math[mode](x, @val ? x)
-                if mode == "first" then @val = x if @sorter(x, @val ? x) <= 0
-                if mode == "last"  then @val = x if @sorter(x, @val ? x) >= 0
-            value: -> @val
-            format: (x) -> if isNaN(x) then x else formatter(x)
-            numInputs: if attr? then 0 else 1
+                for attr in attrs
+                    sums[attr] += parseFloat(record[attr]) if not isNaN parseFloat(record[attr])
+            value: -> sums # Return the full object of calculated sums
+            format: (sums) -> # Format each value in the sums object
+                formattedSums = {}
+                for attr, sum of sums
+                    formattedSums[attr] = formatter(sum)
+                return formattedSums
+            numInputs: attrs.length
+            
+        extremes: (mode, formatter = usFmt) -> ([attrs]) -> (data, rowKey, colKey) ->
+    vals: (attr: null for attr in attrs)
+    sorter: {}
+    push: (record) ->
+        for attr in attrs
+            x = record[attr]
+            sorter[attr] ?= getSort(data?.sorters, attr)
+            if mode in ["min", "max"]
+                x = parseFloat(x)
+                if not isNaN(x) then vals[attr] = Math[mode](x, vals[attr] ? x)
+            if mode == "first" then vals[attr] = x if sorter[attr](x, vals[attr] ? x) <= 0
+            if mode == "last"  then vals[attr] = x if sorter[attr](x, vals[attr] ? x) >= 0
+    value: -> vals
+    format: (vals) -> # Format each value
+        formattedVals = {}
+        for attr, val of vals
+            formattedVals[attr] = if isNaN(val) then val else formatter(val)
+        return formattedVals
+    numInputs: attrs.length
 
-        quantile: (q, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
-            vals: []
-            push: (record) ->
-                x = parseFloat(record[attr])
-                @vals.push(x) if not isNaN(x)
-            value: ->
-                return null if @vals.length == 0
-                @vals.sort((a,b) -> a-b)
-                i = (@vals.length-1)*q
-                return (@vals[Math.floor(i)] + @vals[Math.ceil(i)])/2.0
-            format: formatter
-            numInputs: if attr? then 0 else 1
+        quantile: (q, formatter = usFmt) -> ([attrs]) -> (data, rowKey, colKey) ->
+    vals: (attr: [] for attr in attrs)
+    push: (record) ->
+        for attr in attrs
+            x = parseFloat(record[attr])
+            vals[attr].push(x) if not isNaN(x)
+    value: ->
+        results = {}
+        for attr, arr of vals
+            if arr.length == 0
+                results[attr] = null
+            else
+                arr.sort((a, b) -> a - b)
+                i = (arr.length - 1) * q
+                results[attr] = (arr[Math.floor(i)] + arr[Math.ceil(i)]) / 2.0
+        return results
+    format: (results) ->
+        formattedResults = {}
+        for attr, result of results
+            formattedResults[attr] = formatter(result)
+        return formattedResults
+    numInputs: attrs.length
+    
 
-        runningStat: (mode="mean", ddof=1, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
-            n: 0.0, m: 0.0, s: 0.0
-            push: (record) ->
-                x = parseFloat(record[attr])
-                return if isNaN(x)
-                @n += 1.0
-                if @n == 1.0
-                    @m = x
+       runningStat: (mode = "mean", ddof = 1, formatter = usFmt) -> ([attrs]) -> (data, rowKey, colKey) ->
+    stats: (attr: {n: 0.0, m: 0.0, s: 0.0} for attr in attrs) # Initialize stats for each attribute
+    push: (record) ->
+        for attr, stat of stats
+            x = parseFloat(record[attr])
+            continue if isNaN(x)
+            stat.n += 1.0
+            if stat.n == 1.0
+                stat.m = x
+            else
+                m_new = stat.m + (x - stat.m) / stat.n
+                stat.s = stat.s + (x - stat.m) * (x - m_new)
+                stat.m = m_new
+    value: ->
+        results = {}
+        for attr, stat of stats
+            switch mode
+                when "mean"
+                    results[attr] = if stat.n == 0 then NaN else stat.m
+                when "var"
+                    results[attr] = if stat.n <= ddof then 0 else stat.s / (stat.n - ddof)
+                when "stdev"
+                    results[attr] = if stat.n <= ddof then 0 else Math.sqrt(stat.s / (stat.n - ddof))
                 else
-                    m_new = @m + (x - @m)/@n
-                    @s = @s + (x - @m)*(x - m_new)
-                    @m = m_new
-            value: ->
-                if mode == "mean"
-                    return if @n == 0 then 0/0 else @m
-                return 0 if @n <= ddof
-                switch mode
-                    when "var"   then @s/(@n-ddof)
-                    when "stdev" then Math.sqrt(@s/(@n-ddof))
-            format: formatter
-            numInputs: if attr? then 0 else 1
+                    results[attr] = NaN
+        return results
+    format: (results) -> # Format each result
+        formattedResults = {}
+        for attr, result of results
+            formattedResults[attr] = formatter(result)
+        return formattedResults
+    numInputs: attrs.length
 
-        sumOverSum: (formatter=usFmt) -> ([num, denom]) -> (data, rowKey, colKey) ->
-            sumNum: 0
-            sumDenom: 0
-            push: (record) ->
-                @sumNum   += parseFloat(record[num])   if not isNaN parseFloat(record[num])
-                @sumDenom += parseFloat(record[denom]) if not isNaN parseFloat(record[denom])
-            value: -> @sumNum/@sumDenom
-            format: formatter
-            numInputs: if num? and denom? then 0 else 2
+        sumOverSum: (formatter = usFmt) -> (attrPairs) -> (data, rowKey, colKey) ->
+    sums: (attr: {num: 0, denom: 0} for attr in attrPairs) # Initialize sums
+    push: (record) ->
+        for [num, denom] in attrPairs
+            sums[num].num   += parseFloat(record[num])   if not isNaN parseFloat(record[num])
+            sums[num].denom += parseFloat(record[denom]) if not isNaN parseFloat(record[denom])
+    value: ->
+        results = {}
+        for num, {num: sumNum, denom: sumDenom} of sums
+            results[num] = sumNum / sumDenom if sumDenom != 0
+        return results
+    format: (results) ->
+        formattedResults = {}
+        for num, result of results
+            formattedResults[num] = formatter(result)
+        return formattedResults
+    numInputs: attrPairs.length * 2
 
-        sumOverSumBound80: (upper=true, formatter=usFmt) -> ([num, denom]) -> (data, rowKey, colKey) ->
-            sumNum: 0
-            sumDenom: 0
-            push: (record) ->
-                @sumNum   += parseFloat(record[num])   if not isNaN parseFloat(record[num])
-                @sumDenom += parseFloat(record[denom]) if not isNaN parseFloat(record[denom])
-            value: ->
+        sumOverSumBound80: (upper = true, formatter = usFmt) -> (attrPairs) -> (data, rowKey, colKey) ->
+    sums: (attr: {num: 0, denom: 0} for attr in attrPairs) # Initialize sums for each pair
+    push: (record) ->
+        for [num, denom] in attrPairs
+            sums[num].num   += parseFloat(record[num])   if not isNaN parseFloat(record[num])
+            sums[num].denom += parseFloat(record[denom]) if not isNaN parseFloat(record[denom])
+    value: ->
+        results = {}
+        for num, {num: sumNum, denom: sumDenom} of sums
+            if sumDenom != 0
                 sign = if upper then 1 else -1
-                (0.821187207574908/@sumDenom + @sumNum/@sumDenom + 1.2815515655446004*sign*
-                    Math.sqrt(0.410593603787454/ (@sumDenom*@sumDenom) + (@sumNum*(1 - @sumNum/ @sumDenom))/ (@sumDenom*@sumDenom)))/
-                    (1 + 1.642374415149816/@sumDenom)
-            format: formatter
-            numInputs: if num? and denom? then 0 else 2
-
-        fractionOf: (wrapped, type="total", formatter=usFmtPct) -> (x...) -> (data, rowKey, colKey) ->
-            selector: {total:[[],[]],row:[rowKey,[]],col:[[],colKey]}[type]
-            inner: wrapped(x...)(data, rowKey, colKey)
-            push: (record) -> @inner.push record
-            format: formatter
-            value: -> @inner.value() / data.getAggregator(@selector...).inner.value()
-            numInputs: wrapped(x...)().numInputs
+                results[num] = (0.821187207574908 / sumDenom + sumNum / sumDenom +
+                    1.2815515655446004 * sign *
+                    Math.sqrt(
+                        0.410593603787454 / (sumDenom * sumDenom) +
+                        (sumNum * (1 - sumNum / sumDenom)) / (sumDenom * sumDenom)
+                    )) / (1 + 1.642374415149816 / sumDenom)
+        return results
+    format: (results) -> # Format each bound result
+        formattedResults = {}
+        for num, result of results
+            formattedResults[num] = formatter(result)
+        return formattedResults
+    numInputs: attrPairs.length * 2
+    
+        fractionOf: (wrapped, type = "total", formatter = usFmtPct) -> (x...) -> (data, rowKey, colKey) ->
+    selectors: (attr: {total: [[], []], row: [rowKey, []], col: [[], colKey]}[type] for attr in x)
+    innerAggregators: (attr: wrapped(attr)(data, rowKey, colKey) for attr in x)
+    push: (record) ->
+        for attr, inner of innerAggregators
+            inner.push(record)
+    value: ->
+        results = {}
+        for attr, inner of innerAggregators
+            results[attr] = inner.value() / data.getAggregator(...selectors[attr]).inner.value()
+        return results
+    format: (results) -> # Format each fraction result
+        formattedResults = {}
+        for attr, result of results
+            formattedResults[attr] = formatter(result)
+        return formattedResults
+    numInputs: wrapped(x...)().numInputs
 
     aggregatorTemplates.countUnique = (f) -> aggregatorTemplates.uniques(((x) -> x.length), f)
     aggregatorTemplates.listUnique =  (s) -> aggregatorTemplates.uniques(((x) -> x.sort(naturalSort).join(s)), ((x)->x))
@@ -391,47 +471,57 @@ callWithJQuery ($) ->
             @sortKeys()
             return @rowKeys
 
-        processRecord: (record) -> #this code is called in a tight loop
-            colKey = []
-            rowKey = []
-            colKey.push record[x] ? "null" for x in @colAttrs
-            rowKey.push record[x] ? "null" for x in @rowAttrs
-            flatRowKey = rowKey.join(String.fromCharCode(0))
-            flatColKey = colKey.join(String.fromCharCode(0))
+processRecord: (record) -> #this code is called in a tight loop
+    colKey = []
+    rowKey = []
+    colKey.push record[x] ? "null" for x in @colAttrs
+    rowKey.push record[x] ? "null" for x in @rowAttrs
+    flatRowKey = rowKey.join(String.fromCharCode(0))
+    flatColKey = colKey.join(String.fromCharCode(0))
 
-            @allTotal.push record
+    @allTotal.push record
 
-            if rowKey.length != 0
-                if not @rowTotals[flatRowKey]
-                    @rowKeys.push rowKey
-                    @rowTotals[flatRowKey] = @aggregator(this, rowKey, [])
-                @rowTotals[flatRowKey].push record
+    if rowKey.length != 0
+        if not @rowTotals[flatRowKey]
+            @rowKeys.push rowKey
+            @rowTotals[flatRowKey] = @aggregator(this, rowKey, [])
+        @rowTotals[flatRowKey].push record
 
-            if colKey.length != 0
-                if not @colTotals[flatColKey]
-                    @colKeys.push colKey
-                    @colTotals[flatColKey] = @aggregator(this, [], colKey)
-                @colTotals[flatColKey].push record
+    if colKey.length != 0
+        if not @colTotals[flatColKey]
+            @colKeys.push colKey
+            @colTotals[flatColKey] = @aggregator(this, [], colKey)
+        @colTotals[flatColKey].push record
 
-            if colKey.length != 0 and rowKey.length != 0
-                if not @tree[flatRowKey]
-                    @tree[flatRowKey] = {}
-                if not @tree[flatRowKey][flatColKey]
-                    @tree[flatRowKey][flatColKey] = @aggregator(this, rowKey, colKey)
-                @tree[flatRowKey][flatColKey].push record
+    if colKey.length != 0 and rowKey.length != 0
+        if not @tree[flatRowKey]
+            @tree[flatRowKey] = {}
+        if not @tree[flatRowKey][flatColKey]
+            @tree[flatRowKey][flatColKey] = @aggregator(this, rowKey, colKey)
+        @tree[flatRowKey][flatColKey].push record
 
-        getAggregator: (rowKey, colKey) =>
-            flatRowKey = rowKey.join(String.fromCharCode(0))
-            flatColKey = colKey.join(String.fromCharCode(0))
-            if rowKey.length == 0 and colKey.length == 0
-                agg = @allTotal
-            else if rowKey.length == 0
-                agg = @colTotals[flatColKey]
-            else if colKey.length == 0
-                agg = @rowTotals[flatRowKey]
-            else
-                agg = @tree[flatRowKey][flatColKey]
-            return agg ? {value: (-> null), format: -> ""}
+        getAggregator: (rowKey, colKey) ->
+    flatRowKey = rowKey.join(String.fromCharCode(0))
+    flatColKey = colKey.join(String.fromCharCode(0))
+    if rowKey.length == 0 and colKey.length == 0
+        agg = @allTotal
+    else if rowKey.length == 0
+        agg = @colTotals[flatColKey]
+    else if colKey.length == 0
+        agg = @rowTotals[flatRowKey]
+    else
+        agg = @tree[flatRowKey][flatColKey]
+
+    # Handle multi-value aggregators: return default object if no aggregator found
+    agg ?= { 
+        value: (-> {}), # Return an empty dictionary for multi-value results
+        format: (x) ->
+            formatted = {}
+            for key, val of x
+                formatted[key] = val # Format each value if needed
+            return formatted
+    }
+    return agg
 
     #expose these to the outside world
     $.pivotUtilities = {aggregatorTemplates, aggregators, renderers, derivers, locales,
@@ -549,14 +639,25 @@ callWithJQuery ($) ->
                     tr.appendChild th
             for own j, colKey of colKeys #this is the tight loop
                 aggregator = pivotData.getAggregator(rowKey, colKey)
-                val = aggregator.value()
-                td = document.createElement("td")
-                td.className = "pvtVal row#{i} col#{j}"
-                td.textContent = aggregator.format(val)
-                td.setAttribute("data-value", val)
-                if getClickHandler?
-                    td.onclick = getClickHandler(val, rowKey, colKey)
-                tr.appendChild td
+                val = aggregator.value() # This could now be a dictionary
+                if typeof val is "object"
+                    for key, value of val
+                        # Render each key-value pair appropriately
+                        td = document.createElement("td")
+                        td.className = "pvtVal row#{i} col#{j} #{key}"
+                        td.setAttribute("data-value", value)
+                        td.textContent = aggregator.format({ [key]: value })[key]
+                        if getClickHandler?
+                            td.onclick = getClickHandler(val, rowKey, colKey)
+                        tr.appendChild td
+                else
+                    td = document.createElement("td")
+                    td.className = "pvtVal row#{i} col#{j}"
+                    td.textContent = aggregator.format(val)
+                    td.setAttribute("data-value", val)
+                    if getClickHandler?
+                        td.onclick = getClickHandler(val, rowKey, colKey)
+                    tr.appendChild td
 
             if opts.table.rowTotals || colAttrs.length == 0
                 totalAggregator = pivotData.getAggregator(rowKey, [])
